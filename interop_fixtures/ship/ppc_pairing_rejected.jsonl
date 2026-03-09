@@ -1,0 +1,7 @@
+{"ts":1772828287.8380451,"event":"tls_connected","peer_ski":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+{"ts":1772828287.8382478,"event":"tx_cmi","hex":"0000"}
+{"ts":1772828287.8407507,"event":"rx_cmi","hex":"0000"}
+{"ts":1772828287.8408878,"event":"tx_control","payload":{"connectionHello":{"phase":"ready","waiting":60000}}}
+{"ts":1772828287.8426533,"event":"rx_control","payload":{"connectionHello":{"phase":"pending","waiting":60000}}}
+{"ts":1772828287.8427160,"event":"hello_pending","waiting_ms":60000}
+{"ts":1772828287.8854210,"event":"rx_close","code":4452,"reason":"Node rejected by application."}

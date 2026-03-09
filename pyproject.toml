@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eebus-sdk"
+version = "0.1.0a0"
+description = "Python EEBus / SHIP SDK for HEMS integrations and SMGW debugging"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {file = "LICENSE"}
+authors = [
+  {name = "EEBus SDK Open Core Team"},
+]
+keywords = ["eebus", "ship", "spine", "smgw", "hems", "energy"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Internet",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+  "Topic :: System :: Networking",
+]
+
+[project.scripts]
+eebus = "eebus_sdk.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["eebus_sdk*"]

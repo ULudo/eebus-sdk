@@ -1,0 +1,15 @@
+{"ts":1772828359.7488332,"event":"tls_connected","peer_ski":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+{"ts":1772828359.7490566,"event":"tx_cmi","hex":"0000"}
+{"ts":1772828359.7519724,"event":"rx_cmi","hex":"0000"}
+{"ts":1772828359.7521372,"event":"tx_control","payload":{"connectionHello":{"phase":"ready","waiting":60000}}}
+{"ts":1772828359.7522340,"event":"rx_control","payload":{"connectionHello":{"phase":"ready","waiting":60000}}}
+{"ts":1772828359.7523446,"event":"tx_control","payload":{"messageProtocolHandshake":{"handshakeType":"announceMax","version":{"major":1,"minor":0},"formats":{"format":["JSON-UTF8"]}}}}
+{"ts":1772828359.7582080,"event":"rx_control","payload":{"messageProtocolHandshake":{"handshakeType":"select","version":{"major":1,"minor":0},"formats":{"format":["JSON-UTF8"]}}}}
+{"ts":1772828359.7584715,"event":"tx_control","payload":{"connectionPinState":{"pinState":"none"}}}
+{"ts":1772828359.7612026,"event":"rx_control","payload":{"connectionPinState":{"pinState":"none"}}}
+{"ts":1772828359.7613037,"event":"tx_control","payload":{"accessMethodsRequest":{}}}
+{"ts":1772828359.7644827,"event":"rx_control","payload":{"accessMethodsRequest":[]}}
+{"ts":1772828359.7647000,"event":"tx_control","payload":{"accessMethods":{"id":"i:32266_u:LOCAL_r:HEMS"}}}
+{"ts":1772828359.7651000,"event":"rx_control","payload":{"accessMethods":{"id":"i:32266_u:REMOTE_r:EnergyManager"}}}
+{"ts":1772828359.7652000,"event":"ship_handshake_complete","remote_ship_id":"i:32266_u:REMOTE_r:EnergyManager"}
+{"ts":1772828359.7700000,"event":"rx_data","payload":{"data":{"header":{"protocolId":"ee1.0"},"payload":{"datagram":{"payload":{"nodeManagementDetailedDiscoveryData":{"node":[{"id":1}]}}}}}}}
