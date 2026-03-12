@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 PROTOCOL_ID = "ee1.0"
+SPECIFICATION_VERSION = "1.3.0"
 
 
 @dataclass(slots=True)
@@ -33,6 +34,122 @@ class SpineDatagram:
         return cls(payload=body, header=header)
 
 
+def extract_inner_datagram(datagram: SpineDatagram | dict[str, Any]) -> dict[str, Any]:
+    payload = datagram.payload if isinstance(datagram, SpineDatagram) else datagram
+    inner = payload.get("datagram")
+    if not isinstance(inner, dict):
+        raise ValueError("SPINE payload does not contain a 'datagram' object")
+    return inner
+
+
+def extract_header(datagram: SpineDatagram | dict[str, Any]) -> dict[str, Any]:
+    inner = extract_inner_datagram(datagram)
+    header = inner.get("header")
+    if not isinstance(header, dict):
+        raise ValueError("SPINE datagram does not contain a header object")
+    return header
+
+
+def extract_commands(datagram: SpineDatagram | dict[str, Any]) -> list[dict[str, Any]]:
+    inner = extract_inner_datagram(datagram)
+    payload = inner.get("payload")
+    if not isinstance(payload, dict):
+        raise ValueError("SPINE datagram does not contain a payload object")
+    commands = payload.get("cmd", [])
+    if not isinstance(commands, list):
+        raise ValueError("SPINE datagram cmd payload is not a list")
+    return [command for command in commands if isinstance(command, dict)]
+
+
+def build_datagram(
+    *,
+    source: dict[str, Any],
+    destination: dict[str, Any],
+    cmd_classifier: str,
+    msg_counter: int,
+    commands: list[dict[str, Any]],
+    specification_version: str = SPECIFICATION_VERSION,
+    msg_counter_reference: int | None = None,
+    ack_request: bool | None = None,
+) -> SpineDatagram:
+    header: dict[str, Any] = {
+        "specificationVersion": specification_version,
+        "addressSource": source,
+        "addressDestination": destination,
+        "msgCounter": msg_counter,
+        "cmdClassifier": cmd_classifier,
+    }
+    if msg_counter_reference is not None:
+        header["msgCounterReference"] = msg_counter_reference
+    if ack_request is not None:
+        header["ackRequest"] = ack_request
+    return SpineDatagram(payload={"datagram": {"header": header, "payload": {"cmd": commands}}})
+
+
+def build_reply_datagram(
+    request: SpineDatagram | dict[str, Any],
+    *,
+    source: dict[str, Any],
+    msg_counter: int,
+    commands: list[dict[str, Any]],
+) -> SpineDatagram:
+    header = extract_header(request)
+    return build_datagram(
+        source=source,
+        destination=header.get("addressSource", {}),
+        cmd_classifier="reply",
+        msg_counter=msg_counter,
+        commands=commands,
+        specification_version=header.get("specificationVersion", SPECIFICATION_VERSION),
+        msg_counter_reference=header.get("msgCounter"),
+    )
+
+
+def build_result_datagram(
+    request: SpineDatagram | dict[str, Any],
+    *,
+    source: dict[str, Any],
+    msg_counter: int,
+    error_number: int = 0,
+    description: str | None = None,
+) -> SpineDatagram:
+    header = extract_header(request)
+    result_data: dict[str, Any] = {"errorNumber": error_number}
+    if description:
+        result_data["description"] = description
+    return build_datagram(
+        source=source,
+        destination=header.get("addressSource", {}),
+        cmd_classifier="result",
+        msg_counter=msg_counter,
+        commands=[{"resultData": result_data}],
+        specification_version=header.get("specificationVersion", SPECIFICATION_VERSION),
+        msg_counter_reference=header.get("msgCounter"),
+    )
+
+
+def build_read_datagram(
+    *,
+    source: dict[str, Any],
+    destination: dict[str, Any],
+    msg_counter: int,
+    function_name: str,
+    selectors: Any = None,
+    specification_version: str = SPECIFICATION_VERSION,
+    ack_request: bool = True,
+) -> SpineDatagram:
+    command = {function_name: [] if selectors is None else selectors}
+    return build_datagram(
+        source=source,
+        destination=destination,
+        cmd_classifier="read",
+        msg_counter=msg_counter,
+        commands=[command],
+        specification_version=specification_version,
+        ack_request=ack_request,
+    )
+
+
 def _find_by_key(value: Any, key: str) -> Iterable[Any]:
     if isinstance(value, dict):
         for child_key, child_value in value.items():
@@ -49,6 +166,16 @@ def extract_discovery_payloads(datagram: SpineDatagram | dict[str, Any]) -> list
     results = list(_find_by_key(payload, "nodeManagementDetailedDiscoveryData"))
     results.extend(_find_by_key(payload, "nodeManagementUseCaseData"))
     return results
+
+
+def extract_measurement_descriptions(datagram: SpineDatagram | dict[str, Any]) -> list[Any]:
+    payload = datagram.payload if isinstance(datagram, SpineDatagram) else datagram
+    return list(_find_by_key(payload, "measurementDescriptionListData"))
+
+
+def extract_measurement_payloads(datagram: SpineDatagram | dict[str, Any]) -> list[Any]:
+    payload = datagram.payload if isinstance(datagram, SpineDatagram) else datagram
+    return list(_find_by_key(payload, "measurementListData"))
 
 
 def is_measurement_datagram(datagram: SpineDatagram | dict[str, Any]) -> bool:

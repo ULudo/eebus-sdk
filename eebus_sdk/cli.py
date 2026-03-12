@@ -8,7 +8,8 @@ import json
 import sys
 from pathlib import Path
 
-from .discovery import detect_interface_ip, discover_ship_services
+from .client import HemsClient
+from .discovery import ShipService, detect_interface_ip, discover_ship_services
 from .exceptions import EebusError, PairingRejectedError, ReplayError
 from .identity import IdentityStore
 from .replay import load_trace, summarize_trace
@@ -34,6 +35,16 @@ def _add_common_connect_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--trace-jsonl", help="write structured JSONL trace output")
     parser.add_argument("--trust-anchor", action="append", default=[], help="PEM trust anchor for TLS verification")
     parser.add_argument("--verify-tls", action="store_true", help="enable standard TLS verification")
+    parser.add_argument(
+        "--bootstrap-spine",
+        action="store_true",
+        help="reply to remote discovery requests and request remote detailed discovery data",
+    )
+    parser.add_argument(
+        "--read-measurements",
+        action="store_true",
+        help="bootstrap SPINE and attempt to read remote measurement descriptions and values",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -143,8 +154,26 @@ async def _run_connect(args: argparse.Namespace) -> int:
         trust,
         trace_logger=trace,
     )
+    service = ShipService(
+        service_name=args.server_name,
+        target=args.server_name,
+        port=args.port,
+        path=args.path,
+        ski=args.expected_server_ski,
+        addresses={"ipv4": [args.host], "ipv6": []},
+    )
+    client = HemsClient(session=session, service=service, identity=identity, trust=trust)
     try:
         print(f"SHIP handshake complete with remote SHIP ID: {session.remote_ship_id}")
+        if args.bootstrap_spine and not args.read_measurements:
+            discovery = await client.request_remote_detailed_discovery(timeout=args.timeout)
+            if discovery:
+                _print_json({"remote_detailed_discovery": discovery[-1]})
+            else:
+                print("no remote detailed discovery payload received", file=sys.stderr)
+        if args.read_measurements:
+            _print_json(await client.read_remote_measurements(timeout=max(args.timeout, 6.0)))
+            return 0
         if args.send_datagram_json:
             payload = json.loads(Path(args.send_datagram_json).read_text(encoding="utf-8"))
             await session.send_spine(payload)
