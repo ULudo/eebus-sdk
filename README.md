@@ -21,6 +21,7 @@ The project is currently `alpha`. The transport and core SHIP path are implement
 - CLI workflows for:
   - `eebus discover`
   - `eebus identity create`
+  - `eebus identity import`
   - `eebus trust show`
 - `eebus connect`
 - `eebus trace`
@@ -32,16 +33,20 @@ The project is currently `alpha`. The transport and core SHIP path are implement
 The SDK has already proven the following on the lab network:
 
 - PPC SHIP endpoint discovery via mDNS
-- mutual TLS with a generated client certificate
+- mutual TLS with both generated and imported client certificates
 - WebSocket upgrade to `/ship/`
-- SHIP startup through CMI and hello
+- full SHIP handshake
+- reception of a real PPC SPINE discovery datagram when using an imported legacy client identity
 
-The current PPC blocker is still trust enrollment on the PPC / SMGW side. Before the client certificate is trusted, PPC responds with `connectionHello phase=pending` and closes with `4452 Node rejected by application.` The SDK captures and replays that behavior through fixtures and tests.
+There are now two verified PPC paths:
+
+- New locally generated identities still hit the PPC trust gate. In that case PPC responds with `connectionHello phase=pending` and closes with `4452 Node rejected by application.` The SDK captures and replays that behavior through fixtures and tests.
+- An imported legacy client identity from a previously paired project is accepted by PPC and reaches SPINE exchange. For that identity, the exact SHIP ID matters as well as the certificate; sending the wrong local `accessMethods.id` causes PPC to close with `4450 SHIP id mismatch`.
 
 ## Verified hardware tests
 
 - `SPiNE EnergyLink One` installed in the lab: verified mutual TLS, WebSocket upgrade, full SHIP handshake, and reception of a real SPINE discovery datagram.
-- `PPC CLS / SMGW endpoint` installed in the lab: verified mDNS discovery, mutual TLS, WebSocket upgrade, and SHIP startup through hello; full SPINE exchange is still blocked by PPC-side trust enrollment and currently ends with `4452 Node rejected by application.`
+- `PPC CLS / SMGW endpoint` installed in the lab: verified mDNS discovery, mutual TLS, full SHIP handshake, and reception of a real `nodeManagementDetailedDiscoveryData` read request when using an imported legacy identity. Fresh identities still remain blocked by PPC-side trust enrollment and currently end with `4452 Node rejected by application.`
 
 ## Quickstart
 
@@ -49,6 +54,17 @@ Create an identity:
 
 ```bash
 python3 -m eebus_sdk.cli identity create --out-dir .state/example-identity --device-id HEMS-EXAMPLE
+```
+
+Import an already-paired credential:
+
+```bash
+python3 -m eebus_sdk.cli identity import \
+  --out-dir .state/imported-identity \
+  --cert /path/to/client_ecdsa.crt \
+  --key /path/to/client_ecdsa.key \
+  --ship-id Demo-HEMS-123456789 \
+  --copy-files
 ```
 
 Discover SHIP peers:

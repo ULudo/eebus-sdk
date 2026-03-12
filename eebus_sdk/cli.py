@@ -58,6 +58,19 @@ def build_parser() -> argparse.ArgumentParser:
     identity_create.add_argument("--type", default="EnergyManagementSystem", dest="device_type")
     identity_create.add_argument("--serial-number", type=int, default=1)
     identity_create.add_argument("--overwrite", action="store_true")
+    identity_import = identity_subparsers.add_parser("import", help="import an existing client identity")
+    identity_import.add_argument("--out-dir", required=True)
+    identity_import.add_argument("--cert", required=True, help="path to an existing client certificate")
+    identity_import.add_argument("--key", required=True, help="path to the matching private key")
+    identity_import.add_argument("--ship-id", required=True)
+    identity_import.add_argument("--device-id")
+    identity_import.add_argument("--common-name")
+    identity_import.add_argument("--ski", help="override SKI instead of extracting it from the certificate")
+    identity_import.add_argument("--brand", default="HEMS")
+    identity_import.add_argument("--model", default="ImportedClient")
+    identity_import.add_argument("--type", default="EnergyManagementSystem", dest="device_type")
+    identity_import.add_argument("--copy-files", action="store_true", help="copy cert and key into the identity directory")
+    identity_import.add_argument("--overwrite", action="store_true")
 
     trust = subparsers.add_parser("trust", help="inspect trust configuration")
     trust_subparsers = trust.add_subparsers(dest="trust_command", required=True)
@@ -183,6 +196,24 @@ def main(argv: list[str] | None = None) -> int:
             print()
             print("Enroll this SKI on the SMGW / CLS side before attempting a full SHIP handshake:")
             print(identity.ski)
+            return 0
+
+        if args.command == "identity" and args.identity_command == "import":
+            identity = IdentityStore.import_existing(
+                args.out_dir,
+                cert_path=args.cert,
+                key_path=args.key,
+                ship_id=args.ship_id,
+                device_id=args.device_id,
+                common_name=args.common_name,
+                ski=args.ski,
+                brand=args.brand,
+                model=args.model,
+                device_type=args.device_type,
+                copy_files=args.copy_files,
+                overwrite=args.overwrite,
+            )
+            _print_json(identity.as_dict())
             return 0
 
         if args.command == "trust" and args.trust_command == "show":

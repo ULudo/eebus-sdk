@@ -49,6 +49,19 @@ def extract_ski_from_cert(cert_path: str) -> str:
     return normalize_ski(match.group(1)) or ""
 
 
+def extract_common_name_from_cert(cert_path: str) -> str:
+    result = subprocess.run(
+        ["openssl", "x509", "-in", cert_path, "-noout", "-subject"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    match = re.search(r"CN\s*=\s*([^,\n/]+)", result.stdout)
+    if not match:
+        raise IdentityError(f"could not extract Common Name from {cert_path}")
+    return match.group(1).strip()
+
+
 def extract_ski_from_peer_cert(der_cert: bytes) -> str:
     pem = ssl.DER_cert_to_PEM_cert(der_cert)
     with tempfile.NamedTemporaryFile("w", delete=False, suffix=".pem") as handle:
@@ -172,6 +185,74 @@ authorityKeyIdentifier = keyid:always
             cert_path=str(cert_path),
             key_path=str(key_path),
             qr_payload=build_qr_payload(ship_id, ski, brand=brand, model=model, device_type=device_type),
+        )
+        identity_path.write_text(json.dumps(identity.as_dict(), indent=2), encoding="utf-8")
+        return identity
+
+    @staticmethod
+    def import_existing(
+        out_dir: str,
+        *,
+        cert_path: str,
+        key_path: str,
+        ship_id: str,
+        device_id: str | None = None,
+        common_name: str | None = None,
+        ski: str | None = None,
+        brand: str = "HEMS",
+        model: str = "ImportedClient",
+        device_type: str = "EnergyManagementSystem",
+        copy_files: bool = False,
+        overwrite: bool = False,
+    ) -> IdentityMaterial:
+        if not openssl_available():
+            raise IdentityError("openssl is required to import SHIP certificates")
+
+        source_cert = Path(cert_path).resolve()
+        source_key = Path(key_path).resolve()
+        if not source_cert.exists():
+            raise IdentityError(f"cert_path does not exist: {source_cert}")
+        if not source_key.exists():
+            raise IdentityError(f"key_path does not exist: {source_key}")
+
+        resolved_common_name = common_name or extract_common_name_from_cert(str(source_cert))
+        resolved_device_id = device_id or resolved_common_name.removesuffix(".cls")
+        resolved_ski = normalize_ski(ski) or extract_ski_from_cert(str(source_cert))
+
+        out = Path(out_dir).resolve()
+        out.mkdir(parents=True, exist_ok=True)
+        identity_path = out / "identity.json"
+        target_cert = out / "client.crt.pem"
+        target_key = out / "client.key.pem"
+
+        if not overwrite and identity_path.exists():
+            raise IdentityError(
+                f"{identity_path} already exists; explicit rollover is required, pass overwrite=True to replace it"
+            )
+
+        if copy_files:
+            shutil.copy2(source_cert, target_cert)
+            shutil.copy2(source_key, target_key)
+            final_cert = str(target_cert)
+            final_key = str(target_key)
+        else:
+            final_cert = str(source_cert)
+            final_key = str(source_key)
+
+        identity = IdentityMaterial(
+            ship_id=ship_id,
+            device_id=resolved_device_id,
+            common_name=resolved_common_name,
+            ski=resolved_ski,
+            cert_path=final_cert,
+            key_path=final_key,
+            qr_payload=build_qr_payload(
+                ship_id,
+                resolved_ski,
+                brand=brand,
+                model=model,
+                device_type=device_type,
+            ),
         )
         identity_path.write_text(json.dumps(identity.as_dict(), indent=2), encoding="utf-8")
         return identity
