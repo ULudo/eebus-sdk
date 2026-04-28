@@ -114,19 +114,33 @@ class AsyncTLSWebSocketClient:
     async def _readexactly(self, size: int) -> bytes:
         if self.reader is None:
             raise TransportError("websocket is not connected")
-        return await asyncio.wait_for(self.reader.readexactly(size), timeout=self.timeout)
+        try:
+            return await asyncio.wait_for(self.reader.readexactly(size), timeout=self.timeout)
+        except asyncio.IncompleteReadError as exc:
+            raise TransportError(
+                f"websocket connection closed while reading {size} bytes "
+                f"(received {len(exc.partial)} bytes)"
+            ) from exc
+        except ConnectionError as exc:
+            raise TransportError(f"websocket read failed: {exc}") from exc
 
     async def _write(self, data: bytes) -> None:
         if self.writer is None:
             raise TransportError("websocket is not connected")
-        self.writer.write(data)
-        await asyncio.wait_for(self.writer.drain(), timeout=self.timeout)
+        try:
+            self.writer.write(data)
+            await asyncio.wait_for(self.writer.drain(), timeout=self.timeout)
+        except ConnectionError as exc:
+            raise TransportError(f"websocket write failed: {exc}") from exc
 
     async def send_frame(self, opcode: int, payload: bytes, *, fin: bool = True) -> None:
         await self._write(encode_frame(opcode, payload, mask=True, fin=fin))
 
     async def send_binary(self, payload: bytes) -> None:
         await self.send_frame(0x2, payload)
+
+    async def send_ping(self, payload: bytes = b"") -> None:
+        await self.send_frame(0x9, payload)
 
     async def receive_frame(self) -> WebSocketFrame:
         fragments: list[bytes] = []

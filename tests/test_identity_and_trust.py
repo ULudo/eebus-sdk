@@ -33,17 +33,17 @@ class IdentityAndTrustTests(unittest.TestCase):
                 f"{temp_dir}/imported",
                 cert_path=source.cert_path,
                 key_path=source.key_path,
-                ship_id="Demo-HEMS-123456789",
+                ship_id="Interop-HEMS-123456789",
                 brand="HEMS",
-                model="ImportedClient",
+                model="ImportedIdentity",
             )
             loaded = IdentityStore.load(f"{temp_dir}/imported/identity.json")
 
-        self.assertEqual(imported.ship_id, "Demo-HEMS-123456789")
+        self.assertEqual(imported.ship_id, "Interop-HEMS-123456789")
         self.assertEqual(imported.cert_path, source.cert_path)
         self.assertEqual(imported.key_path, source.key_path)
         self.assertEqual(loaded.ski, source.ski)
-        self.assertIn("Demo-HEMS-123456789", loaded.qr_payload)
+        self.assertIn("Interop-HEMS-123456789", loaded.qr_payload)
 
     def test_import_existing_identity_with_copy(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -52,7 +52,7 @@ class IdentityAndTrustTests(unittest.TestCase):
                 f"{temp_dir}/imported",
                 cert_path=source.cert_path,
                 key_path=source.key_path,
-                ship_id="Demo-HEMS-123456789",
+                ship_id="Interop-HEMS-123456789",
                 copy_files=True,
             )
             loaded = IdentityStore.load(f"{temp_dir}/imported/identity.json")
@@ -61,4 +61,4 @@ class IdentityAndTrustTests(unittest.TestCase):
         self.assertNotEqual(imported.key_path, source.key_path)
         self.assertTrue(imported.cert_path.endswith("client.crt.pem"))
         self.assertTrue(imported.key_path.endswith("client.key.pem"))
-        self.assertEqual(loaded.ship_id, "Demo-HEMS-123456789")
+        self.assertEqual(loaded.ship_id, "Interop-HEMS-123456789")

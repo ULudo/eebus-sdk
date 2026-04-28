@@ -14,11 +14,26 @@ def _encode_node(value: Any) -> Any:
     return value
 
 
+def _encode_ship_data_node(value: Any) -> Any:
+    if isinstance(value, dict):
+        encoded_items: list[dict[str, Any]] = []
+        for key, child in value.items():
+            if key == "payload" and isinstance(child, dict):
+                encoded_items.append({key: {nested_key: _encode_node(nested_value) for nested_key, nested_value in child.items()}})
+            else:
+                encoded_items.append({key: _encode_node(child)})
+        return encoded_items
+    return _encode_node(value)
+
+
 def to_eebus_json_bytes(payload: dict[str, Any]) -> bytes:
     """Encode a normal JSON object into the EEBUS JSON array form."""
     if not isinstance(payload, dict):
         raise TypeError("EEBUS JSON payload must be a dict at the top level")
-    encoded = {key: _encode_node(value) for key, value in payload.items()}
+    encoded = {
+        key: _encode_ship_data_node(value) if key == "data" else _encode_node(value)
+        for key, value in payload.items()
+    }
     return json.dumps(encoded, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
 
 

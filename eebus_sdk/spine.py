@@ -77,10 +77,10 @@ def build_datagram(
         "addressSource": source,
         "addressDestination": destination,
         "msgCounter": msg_counter,
-        "cmdClassifier": cmd_classifier,
     }
     if msg_counter_reference is not None:
         header["msgCounterReference"] = msg_counter_reference
+    header["cmdClassifier"] = cmd_classifier
     if ack_request is not None:
         header["ackRequest"] = ack_request
     return SpineDatagram(payload={"datagram": {"header": header, "payload": {"cmd": commands}}})
@@ -136,7 +136,7 @@ def build_read_datagram(
     function_name: str,
     selectors: Any = None,
     specification_version: str = SPECIFICATION_VERSION,
-    ack_request: bool = True,
+    ack_request: bool | None = True,
 ) -> SpineDatagram:
     command = {function_name: [] if selectors is None else selectors}
     return build_datagram(

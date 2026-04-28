@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import ssl
 import unittest
 
-from eebus_sdk.websocket import encode_frame
+from eebus_sdk.exceptions import TransportError
+from eebus_sdk.websocket import AsyncTLSWebSocketClient, encode_frame
 
 
 class WebSocketEncodingTests(unittest.TestCase):
@@ -23,3 +26,48 @@ class WebSocketEncodingTests(unittest.TestCase):
         self.assertEqual(frame[1], 126)
         self.assertEqual(frame[2:4], b"\x00\xc8")
         self.assertEqual(frame[4:], payload)
+
+
+class _IncompleteReadReader:
+    async def readexactly(self, size: int) -> bytes:
+        raise asyncio.IncompleteReadError(partial=b"", expected=size)
+
+
+class _BrokenWriter:
+    def write(self, data: bytes) -> None:
+        raise ConnectionResetError("boom")
+
+    async def drain(self) -> None:
+        return None
+
+
+class WebSocketTransportTests(unittest.IsolatedAsyncioTestCase):
+    async def test_readexactly_translates_incomplete_read_to_transport_error(self) -> None:
+        client = AsyncTLSWebSocketClient(
+            host="127.0.0.1",
+            port=4711,
+            path="/ship/",
+            server_name="peer.local",
+            ssl_context=ssl.create_default_context(),
+        )
+        client.reader = _IncompleteReadReader()
+
+        with self.assertRaises(TransportError) as ctx:
+            await client._readexactly(2)
+
+        self.assertIn("closed while reading 2 bytes", str(ctx.exception))
+
+    async def test_write_translates_connection_reset_to_transport_error(self) -> None:
+        client = AsyncTLSWebSocketClient(
+            host="127.0.0.1",
+            port=4711,
+            path="/ship/",
+            server_name="peer.local",
+            ssl_context=ssl.create_default_context(),
+        )
+        client.writer = _BrokenWriter()
+
+        with self.assertRaises(TransportError) as ctx:
+            await client._write(b"hello")
+
+        self.assertIn("websocket write failed", str(ctx.exception))

@@ -19,7 +19,7 @@ from .exceptions import IdentityError
 def default_device_id() -> str:
     hostname = socket.gethostname().upper().replace(".", "-")
     sanitized = re.sub(r"[^A-Z0-9_-]", "", hostname)
-    return sanitized or "HEMSLAB"
+    return sanitized or "EEBUS-SDK"
 
 
 def default_ship_id(device_id: str) -> str:
@@ -102,7 +102,7 @@ class IdentityStore:
         ship_id: str | None = None,
         country: str = "DE",
         brand: str = "HEMS",
-        model: str = "LabClient",
+        model: str = "SDKClient",
         device_type: str = "EnergyManagementSystem",
         serial_number: int = 1,
         overwrite: bool = False,
@@ -200,7 +200,7 @@ authorityKeyIdentifier = keyid:always
         common_name: str | None = None,
         ski: str | None = None,
         brand: str = "HEMS",
-        model: str = "ImportedClient",
+        model: str = "ImportedIdentity",
         device_type: str = "EnergyManagementSystem",
         copy_files: bool = False,
         overwrite: bool = False,

@@ -1,108 +1,105 @@
 # EEBus SDK
 
-`eebus-sdk` is a Python-first SHIP / EEBus / SPINE toolkit for HEMS vendors, lab engineers, and SMGW integrators.
+Python SDK and command-line tools for EEBus SHIP/SPINE integrations, with a focus on HEMS, load-power control, discovery, identity handling, and interoperability testing.
 
-This repository contains three public deliverables:
+The SDK provides:
 
-- `eebus_sdk`: importable Python package
-- `eebus`: CLI for discovery, identity management, live sessions, and trace replay
-- `interop_fixtures`: sanitized JSONL traces used for regression tests and interoperability debugging
+- SHIP client and server connections with TLS identity and trust handling.
+- SPINE discovery, read, notify, binding, and write flows used by common HEMS integrations.
+- Load-power CLI workflows for LPC and LPP.
+- A generic LP bridge that can receive load-power commands and forward them to another EEBus peer.
+- Sanitized interoperability fixtures for regression tests.
 
-The project is currently `alpha`. The transport and core SHIP path are implemented and tested, but PPC trust commissioning and broader profile coverage are still being expanded.
+## Installation
 
-## Current capabilities
+```bash
+python3 -m pip install -e .
+```
 
-- mDNS / DNS-SD discovery of `_ship._tcp.local` services
-- SHIP identity generation with persistent client certificates
-- explicit trust configuration with SKI pinning and optional CA anchors
-- asyncio-based TLS + WebSocket + SHIP session handling
-- SPINE datagram send/receive helpers
-- recorded JSONL tracing and replay summaries
-- CLI workflows for:
-  - `eebus discover`
-  - `eebus identity create`
-  - `eebus identity import`
-  - `eebus trust show`
-- `eebus connect`
-- `eebus trace`
-- `eebus replay`
-- `eebus selftest`
-
-## PPC status
-
-The SDK has already proven the following on the lab network:
-
-- PPC SHIP endpoint discovery via mDNS
-- mutual TLS with both generated and imported client certificates
-- WebSocket upgrade to `/ship/`
-- full SHIP handshake
-- reception of a real PPC SPINE discovery datagram when using an imported legacy client identity
-
-There are now two verified PPC paths:
-
-- New locally generated identities still hit the PPC trust gate. In that case PPC responds with `connectionHello phase=pending` and closes with `4452 Node rejected by application.` The SDK captures and replays that behavior through fixtures and tests.
-- An imported legacy client identity from a previously paired project is accepted by PPC and reaches SPINE exchange. For that identity, the exact SHIP ID matters as well as the certificate; sending the wrong local `accessMethods.id` causes PPC to close with `4450 SHIP id mismatch`.
-
-## Verified hardware tests
-
-- `SPiNE EnergyLink One` installed in the lab: verified mutual TLS, WebSocket upgrade, full SHIP handshake, and reception of a real SPINE discovery datagram.
-- `PPC CLS / SMGW endpoint` installed in the lab: verified mDNS discovery, mutual TLS, full SHIP handshake, and reception of a real `nodeManagementDetailedDiscoveryData` read request when using an imported legacy identity. Fresh identities still remain blocked by PPC-side trust enrollment and currently end with `4452 Node rejected by application.`
+Python 3.11 or newer is required. The `zeroconf` runtime dependency is intentional: it is used for mDNS/DNS-SD discovery and local SHIP service advertisement.
 
 ## Quickstart
 
-Create an identity:
+Use an existing EEBus identity file as `<IDENTITY_JSON>`. Keep identity files, private keys, peer certificates, and traces outside source control.
+
+Discover SHIP services on the local interface:
 
 ```bash
-python3 -m eebus_sdk.cli identity create --out-dir .state/example-identity --device-id HEMS-EXAMPLE
+eebus discover --interface-ip <INTERFACE_IP> --tls-check
 ```
 
-Import an already-paired credential:
+Run the built-in protocol self-test:
 
 ```bash
-python3 -m eebus_sdk.cli identity import \
-  --out-dir .state/imported-identity \
-  --cert /path/to/client_ecdsa.crt \
-  --key /path/to/client_ecdsa.key \
-  --ship-id Demo-HEMS-123456789 \
-  --copy-files
+eebus selftest --verify-tls
 ```
 
-Discover SHIP peers:
+Replay a sanitized interoperability fixture:
 
 ```bash
-python3 -m eebus_sdk.cli discover --interface-ip 192.0.2.2 --tls-check
+eebus trace tests/interop_fixtures/ship/spine_discovery_success.jsonl
 ```
 
-Connect to a SHIP peer:
+Send an LPC consumption limit:
 
 ```bash
-python3 -m eebus_sdk.cli connect \
-  --identity .state/example-identity/identity.json \
-  --host 192.0.2.10 \
-  --port 23292 \
-  --path /ship/ \
-  --server-name ship-peer.example.local \
-  --expected-server-ski 0123456789abcdef0123456789abcdef01234567 \
-  --trace-jsonl .state/example-identity/ship-session.jsonl
+eebus lpc send \
+  --identity <IDENTITY_JSON> \
+  --interface-ip <INTERFACE_IP> \
+  --peer-trust-anchor <PEER_CERT_PEM> \
+  --trusted-client-ski <PEER_SKI> \
+  --watts <WATTS> \
+  --duration-seconds <DURATION> \
+  --trace-jsonl <TRACE_JSONL> \
+  --exit-after-confirmation
 ```
 
-Summarize a recorded trace:
+Send an LPP production/feed-in limit:
 
 ```bash
-python3 -m eebus_sdk.cli trace interop_fixtures/ship/spine_discovery_success.jsonl
+eebus lpp send \
+  --identity <IDENTITY_JSON> \
+  --interface-ip <INTERFACE_IP> \
+  --peer-trust-anchor <PEER_CERT_PEM> \
+  --trusted-client-ski <PEER_SKI> \
+  --watts <WATTS> \
+  --duration-seconds <DURATION> \
+  --trace-jsonl <TRACE_JSONL> \
+  --exit-after-confirmation
 ```
 
-Validate a fixture in CI:
+For both commands, users pass positive watts. LPC treats `<WATTS>` as a consumption limit; LPP treats `<WATTS>` as a production or feed-in limit. Any protocol-specific sign convention is handled inside the SDK.
+
+Bridge load-power commands to another EEBus peer:
 
 ```bash
-python3 -m eebus_sdk.cli replay interop_fixtures/ship/ppc_pairing_rejected.jsonl --expect pairing-rejected
+eebus lp bridge \
+  --identity <IDENTITY_JSON> \
+  --interface-ip <INTERFACE_IP> \
+  --peer-trust-anchor <PEER_CERT_PEM> \
+  --trusted-client-ski <PEER_SKI> \
+  --wallbox-identity <IDENTITY_JSON> \
+  --wallbox-peer-trust-anchor <PEER_CERT_PEM> \
+  --wallbox-trusted-client-ski <PEER_SKI> \
+  --wallbox-ski <PEER_SKI> \
+  --trace-jsonl <TRACE_JSONL> \
+  --wallbox-trace-jsonl <TRACE_JSONL>
 ```
 
-Run a full local loopback self-test with both transport and application roles on the same PC:
+The bridge listens for inbound LPC or LPP load-power commands and forwards the matching command type to the configured downstream peer.
 
-```bash
-python3 -m eebus_sdk.cli selftest --verify-tls
-```
+## Live-Device Interoperability Workflow
+
+For a sanitized lab validation run:
+
+1. Provision a dedicated test identity and use it as `<IDENTITY_JSON>`.
+2. Import the peer certificate as `<PEER_CERT_PEM>` or configure the expected `<PEER_SKI>`.
+3. Discover the peer on `<INTERFACE_IP>` and confirm the SKI before sending control commands.
+4. Run either `eebus lpc send`, `eebus lpp send`, or `eebus lp bridge` with `<TRACE_JSONL>` enabled.
+5. Verify that the session connects, the peer is trusted, the SPINE write is accepted, and the expected acknowledgement or readback is observed.
+6. Sanitize traces before sharing them.
+
+Do not commit real identity files, private keys, certificates, or unsanitized traces.
 
 ## Python API
 
@@ -113,37 +110,61 @@ from eebus_sdk import HemsClient, IdentityStore, TrustStore, discover_ship_servi
 
 
 async def main() -> None:
-    identity = IdentityStore.load(".state/example-identity/identity.json")
-    services = discover_ship_services("192.0.2.2")
-    peer = next(service for service in services if service.service_name.endswith("._ship._tcp.local"))
-    trust = TrustStore.from_server_ski(peer.ski, verify_tls=False)
+    identity = IdentityStore.load("<IDENTITY_JSON>")
+    trust = TrustStore.from_server_ski(
+        "<PEER_SKI>",
+        verify_tls=True,
+        trust_anchors=("<PEER_CERT_PEM>",),
+    )
+    services = discover_ship_services("<INTERFACE_IP>", tls_check=True)
+    service = next(item for item in services if item.ski == "<PEER_SKI>")
 
-    client = await HemsClient.connect(peer, identity, trust, interface_ip="192.0.2.2")
-    try:
-        discovery = await client.discover_nodes(timeout=5.0)
-        print(discovery)
-    finally:
-        await client.close()
+    client = await HemsClient.connect(
+        service,
+        identity,
+        trust,
+        interface_ip="<INTERFACE_IP>",
+    )
+    measurements = await client.read_remote_measurements()
+    print(measurements)
+    await client.close()
 
 
 asyncio.run(main())
 ```
 
+The intended public API is small:
+
+- `IdentityStore` for local SHIP identity material.
+- `TrustStore` for peer trust configuration.
+- `discover_ship_services` and `ShipService` for discovery.
+- `HemsClient` for outgoing SHIP/SPINE client workflows.
+- `ShipServer` and `ShipServerConfig` for server-side HEMS or bridge workflows.
+
+Private modules in `eebus_sdk` are implementation details and may change without notice.
+
+## Compatibility
+
+The test fixtures cover successful SHIP pairing, SPINE discovery, feature reads, subscriptions, load-power writes, and selected peer compatibility behavior. See `COMPATIBILITY.md` for the current compatibility matrix and fixture notes.
+
+## Repository Layout
+
+```text
+eebus_sdk/          SDK package and CLI implementation
+tests/              Unit tests and sanitized SHIP/SPINE JSONL fixtures
+COMPATIBILITY.md    Compatibility and fixture notes
+```
+
 ## Development
 
-Run the unit test suite:
+Run the test suite:
 
 ```bash
 python3 -m unittest discover -s tests -v
 ```
 
-Key documents:
+Check for whitespace problems before committing:
 
-- [interop_fixtures/README.md](interop_fixtures/README.md)
-- [COMPATIBILITY.md](COMPATIBILITY.md)
-
-## Scope and claims
-
-- This project does not imply BSI or EEBus certification by itself.
-- The repository documents behavior in original wording and links to official sources instead of republishing spec text.
-- The alpha target is a usable SDK and debugging toolchain for PPC SMGW and at least one non-PPC SHIP/SPINE peer.
+```bash
+git diff --check
+```

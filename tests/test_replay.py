@@ -6,12 +6,12 @@ from pathlib import Path
 from eebus_sdk.replay import load_trace, summarize_trace
 
 
-FIXTURES = Path(__file__).resolve().parents[1] / "interop_fixtures" / "ship"
+FIXTURES = Path(__file__).resolve().parent / "interop_fixtures" / "ship"
 
 
 class ReplayFixtureTests(unittest.TestCase):
     def test_pairing_rejected_fixture(self) -> None:
-        summary = summarize_trace(load_trace(FIXTURES / "ppc_pairing_rejected.jsonl"))
+        summary = summarize_trace(load_trace(FIXTURES / "gateway_pairing_rejected.jsonl"))
         self.assertTrue(summary["tls_connected"])
         self.assertTrue(summary["pairing_rejected"])
         self.assertEqual(summary["close_code"], 4452)
