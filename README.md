@@ -86,7 +86,7 @@ eebus lp bridge \
   --wallbox-trace-jsonl <TRACE_JSONL>
 ```
 
-The bridge listens for inbound LPC or LPP load-power commands and forwards the matching command type to the configured downstream peer.
+The bridge listens for inbound LPC or LPP load-power commands and forwards the matching command type to the configured downstream peer. If the upstream source peer is itself the SHIP server, add the outbound-source options `--source-host`, `--source-port`, `--source-server-name`, and `--source-peer-ski`; in that mode the SDK connects to the source peer and still hosts the wallbox-facing endpoint.
 
 ## Live-Device Interoperability Workflow
 

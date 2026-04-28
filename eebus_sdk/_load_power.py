@@ -33,8 +33,17 @@ def encode_limit_watts(watts: int, limit_id: int | None) -> int:
     return watts
 
 
-def decode_limit_watts(protocol_watts: int, limit_id: int | None) -> int:
+def _apply_scale(number: int, scale: int | None) -> int:
+    if not isinstance(scale, int) or scale == 0:
+        return number
+    if scale > 0:
+        return number * (10**scale)
+    return int(round(number / (10 ** abs(scale))))
+
+
+def decode_limit_watts(protocol_watts: int, limit_id: int | None, scale: int | None = None) -> int:
     """Convert a SPINE LoadControl value to public positive LP watts."""
+    protocol_watts = _apply_scale(protocol_watts, scale)
     if limit_id in {0, 1}:
         return abs(protocol_watts)
     return protocol_watts
@@ -76,6 +85,7 @@ def extract_limit_state(payload: Any) -> dict[str, Any] | None:
                 state["watts"] = decode_limit_watts(
                     number,
                     limit_id if isinstance(limit_id, int) else None,
+                    scale if isinstance(scale, int) else None,
                 )
             if isinstance(scale, int):
                 state["scale"] = scale

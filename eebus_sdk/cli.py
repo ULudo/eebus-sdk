@@ -14,10 +14,11 @@ from .client import HemsClient
 from .discovery import ShipService, detect_interface_ip, discover_ship_services
 from .exceptions import EebusError, PairingRejectedError, ReplayError
 from .identity import IdentityStore, normalize_ski
+from ._load_power import extract_preferred_load_power_state
 from .server import ShipServer, ShipServerConfig, ShipServerEvent
 from .replay import load_trace, summarize_trace
 from .selftest import run_loopback_selftest
-from .ship import ShipConnectionConfig, ShipSession
+from .ship import ShipConnectionConfig, ShipEvent, ShipSession
 from .spine import extract_commands, extract_header
 from .trace import TraceLogger
 from .trust import TrustStore
@@ -121,7 +122,43 @@ def _add_load_power_bridge_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--wallbox-ski", required=True, help="SKI of the connected wallbox peer")
     parser.add_argument(
         "--source-peer-ski",
-        help="optional SKI of the inbound source peer; when omitted, forward load-power writes from any non-wallbox peer",
+        help="optional SKI of the source peer; in outbound mode this is also used as the expected server SKI",
+    )
+    parser.add_argument("--source-host", help="connect to the load-power source peer instead of waiting for it inbound")
+    parser.add_argument("--source-port", type=int, help="source peer SHIP port for outbound source mode")
+    parser.add_argument("--source-path", default="/ship/", help="source peer SHIP websocket path for outbound source mode")
+    parser.add_argument(
+        "--source-server-name",
+        help="TLS server name for outbound source mode; defaults to --source-host",
+    )
+    parser.add_argument(
+        "--source-profile",
+        choices=("default", "hems-reference", "cls-adapter"),
+        default="cls-adapter",
+        help="local SPINE profile used for outbound source mode",
+    )
+    parser.add_argument(
+        "--source-pairing-wait-seconds",
+        type=int,
+        default=60,
+        help="seconds to wait during outbound source SHIP pairing",
+    )
+    parser.add_argument(
+        "--source-timeout",
+        type=float,
+        default=10.0,
+        help="socket timeout for outbound source mode",
+    )
+    parser.add_argument(
+        "--source-trust-anchor",
+        action="append",
+        default=[],
+        help="PEM trust anchor for outbound source TLS verification; may be provided multiple times",
+    )
+    parser.add_argument(
+        "--source-verify-tls",
+        action="store_true",
+        help="enable standard TLS verification for outbound source mode",
     )
     parser.add_argument(
         "--wallbox-identity",
@@ -363,6 +400,49 @@ def _parse_duration(duration: str) -> int:
     return total
 
 
+def _load_power_forward_request_from_state(
+    state: dict[str, Any],
+    *,
+    peer_ski: str | None,
+) -> dict[str, Any] | None:
+    watts = state.get("watts")
+    if not isinstance(watts, int):
+        return None
+    limit_id = state.get("limit_id", 0)
+    if not isinstance(limit_id, int):
+        limit_id = 0
+    is_active = state.get("is_active")
+    if not isinstance(is_active, bool):
+        is_active = True
+    duration_seconds = None
+    duration = state.get("duration")
+    if isinstance(duration, str):
+        duration_seconds = _parse_duration(duration)
+    return {
+        "peer_ski": peer_ski,
+        "watts": watts,
+        "limit_id": limit_id,
+        "is_active": is_active,
+        "duration": duration,
+        "duration_seconds": duration_seconds,
+    }
+
+
+def _load_power_forward_request_from_datagram(datagram: Any, *, peer_ski: str | None) -> dict[str, Any] | None:
+    header = extract_header(datagram)
+    if header.get("cmdClassifier") != "write":
+        return None
+    for command in extract_commands(datagram):
+        payload = command.get("loadControlLimitListData")
+        if payload is None:
+            continue
+        state = extract_preferred_load_power_state(payload)
+        if state is None:
+            continue
+        return _load_power_forward_request_from_state(state, peer_ski=peer_ski)
+    return None
+
+
 async def _listen_for_spine_events(client: HemsClient) -> None:
     print("listening for incoming SPINE datagrams; press Ctrl-C to stop")
     async for event in client.session.events():
@@ -496,6 +576,56 @@ def _build_wallbox_bridge_runtime(
     return announcer, listener, port
 
 
+def _build_source_connection_config(args: argparse.Namespace) -> ShipConnectionConfig:
+    if not args.source_host:
+        raise EebusError("--source-host is required for outbound source mode")
+    if args.source_port is None:
+        raise EebusError("--source-port is required for outbound source mode")
+    config = ShipConnectionConfig(
+        host=args.source_host,
+        port=args.source_port,
+        path=args.source_path,
+        server_name=args.source_server_name or args.source_host,
+        timeout=args.source_timeout,
+        pairing_wait_seconds=args.source_pairing_wait_seconds,
+    )
+    if args.source_profile in {"hems-reference", "cls-adapter"}:
+        config.access_handshake_mode = "standard"
+        config.send_access_methods_response = False
+        config.send_local_access_methods = True
+    return config
+
+
+async def _open_bridge_source_client(args: argparse.Namespace, trace: TraceLogger) -> HemsClient:
+    identity = IdentityStore.load(args.identity)
+    trust = TrustStore.from_server_ski(
+        args.source_peer_ski,
+        verify_tls=args.source_verify_tls,
+        trust_anchors=tuple(args.source_trust_anchor),
+    )
+    session = await ShipSession.connect(
+        _build_source_connection_config(args),
+        identity,
+        trust,
+        trace_logger=trace,
+    )
+    service = ShipService(
+        service_name=args.source_server_name or args.source_host,
+        target=args.source_server_name or args.source_host,
+        port=args.source_port,
+        path=args.source_path,
+        ski=args.source_peer_ski,
+        addresses={"ipv4": [args.source_host], "ipv6": []},
+    )
+    return HemsClient(
+        session=session,
+        service=service,
+        identity=identity,
+        trust=trust,
+        profile=args.source_profile,
+    )
+
+
 async def _serve_server(args: argparse.Namespace) -> int:
     interface_ip, announcer, listener = _build_server_runtime(args)
     await listener.start()
@@ -619,7 +749,7 @@ async def _run_lp_send(args: argparse.Namespace) -> int:
         await listener.stop()
 
 
-async def _next_bridge_event(side: str, events: AsyncIterator[ShipServerEvent]) -> tuple[str, ShipServerEvent]:
+async def _next_bridge_event(side: str, events: AsyncIterator[Any]) -> tuple[str, Any]:
     return side, await events.__anext__()
 
 
@@ -630,34 +760,65 @@ async def _run_lp_bridge(args: argparse.Namespace) -> int:
     source_peer_ski = normalize_ski(args.source_peer_ski) if args.source_peer_ski else None
     if args.source_peer_ski and source_peer_ski is None:
         raise EebusError("--source-peer-ski is invalid")
+    source_client_mode = bool(args.source_host)
+    if source_client_mode and args.source_port is None:
+        raise EebusError("--source-port is required when --source-host is used")
+    if source_client_mode and not args.wallbox_identity:
+        raise EebusError("--wallbox-identity is required when --source-host is used")
 
-    interface_ip, announcer, listener = _build_server_runtime(args, spine_profile="cls-load-power")
+    interface_ip = args.interface_ip or detect_interface_ip()
+    announcer: ShipServiceAdvertiser | None = None
+    listener: ShipServer | None = None
+    source_client: HemsClient | None = None
+    if source_client_mode:
+        source_client = await _open_bridge_source_client(args, TraceLogger(args.trace_jsonl))
+    else:
+        interface_ip, announcer, listener = _build_server_runtime(args, spine_profile="cls-load-power")
     wallbox_announcer: ShipServiceAdvertiser | None = None
-    wallbox_listener: ShipServer = listener
+    wallbox_listener: ShipServer | None = listener
     wallbox_port = args.port
     if args.wallbox_identity:
         wallbox_announcer, wallbox_listener, wallbox_port = _build_wallbox_bridge_runtime(
             args,
             interface_ip=interface_ip,
         )
+    if wallbox_listener is None:
+        raise EebusError("no wallbox listener configured")
 
     if wallbox_announcer is not None:
         await wallbox_listener.start()
         await wallbox_announcer.start()
-    await listener.start()
-    await announcer.start()
+    if listener is not None and announcer is not None:
+        await listener.start()
+        await announcer.start()
 
-    event_tasks: dict[asyncio.Task[tuple[str, ShipServerEvent]], str] = {}
-    source_events = listener.events().__aiter__()
-    event_tasks[asyncio.create_task(_next_bridge_event("source", source_events))] = "source"
+    event_tasks: dict[asyncio.Task[tuple[str, Any]], str] = {}
+    source_events: AsyncIterator[Any] | None = None
+    wallbox_events: AsyncIterator[Any] | None = None
+    if source_client is not None:
+        source_events = source_client.session_events().__aiter__()
+        event_tasks[asyncio.create_task(_next_bridge_event("source-client", source_events))] = "source-client"
+    elif listener is not None:
+        source_events = listener.events().__aiter__()
+        event_tasks[asyncio.create_task(_next_bridge_event("source", source_events))] = "source"
     if wallbox_listener is not listener:
         wallbox_events = wallbox_listener.events().__aiter__()
         event_tasks[asyncio.create_task(_next_bridge_event("wallbox", wallbox_events))] = "wallbox"
-    print(
-        f"serving local SHIP endpoint on {args.bind_host}:{args.port}, published as {args.device_id} via {interface_ip}",
-        flush=True,
-    )
-    if wallbox_listener is not listener:
+    if source_client is not None:
+        print(
+            f"connected source SHIP client to {args.source_host}:{args.source_port} as {args.source_profile}",
+            flush=True,
+        )
+        print(
+            f"SOURCE ship_ready peer_ski={source_client.session.remote_server_ski or '-'} remote_ship_id={source_client.session.remote_ship_id or '-'}",
+            flush=True,
+        )
+    else:
+        print(
+            f"serving local SHIP endpoint on {args.bind_host}:{args.port}, published as {args.device_id} via {interface_ip}",
+            flush=True,
+        )
+    if wallbox_listener is not listener or source_client is not None:
         print(
             f"serving wallbox SHIP endpoint on {args.wallbox_bind_host}:{wallbox_port}, published as {args.wallbox_device_id or IdentityStore.load(args.wallbox_identity).device_id} via {interface_ip}",
             flush=True,
@@ -666,7 +827,9 @@ async def _run_lp_bridge(args: argparse.Namespace) -> int:
         f"bridging inbound LPC/LPP writes to wallbox peer {wallbox_ski}",
         flush=True,
     )
-    if source_peer_ski:
+    if source_client is not None:
+        print(f"accepting load-power source datagrams from outbound peer {source_client.session.remote_server_ski or source_peer_ski or '-'}", flush=True)
+    elif source_peer_ski:
         print(f"accepting load-power source peer {source_peer_ski}", flush=True)
     else:
         print("accepting load-power source peers from any non-wallbox inbound client", flush=True)
@@ -679,28 +842,10 @@ async def _run_lp_bridge(args: argparse.Namespace) -> int:
             return None
         if source_peer_ski is not None and peer_ski != source_peer_ski:
             return None
-        watts = event.payload.get("watts")
-        if not isinstance(watts, int):
+        request = _load_power_forward_request_from_state(event.payload, peer_ski=peer_ski)
+        if request is None:
             print("ignoring inbound load-power write without integer watt value", flush=True)
-            return None
-        limit_id = event.payload.get("limit_id", 0)
-        if not isinstance(limit_id, int):
-            limit_id = 0
-        is_active = event.payload.get("is_active")
-        if not isinstance(is_active, bool):
-            is_active = True
-        duration_seconds = None
-        duration = event.payload.get("duration")
-        if isinstance(duration, str):
-            duration_seconds = _parse_duration(duration)
-        return {
-            "peer_ski": peer_ski,
-            "watts": watts,
-            "limit_id": limit_id,
-            "is_active": is_active,
-            "duration": duration,
-            "duration_seconds": duration_seconds,
-        }
+        return request
 
     async def _forward_to_wallbox(request: dict[str, Any], *, deferred: bool = False) -> bool:
         use_case = _load_power_use_case(request["limit_id"])
@@ -728,9 +873,31 @@ async def _run_lp_bridge(args: argparse.Namespace) -> int:
             task = next(iter(done))
             side, event = task.result()
             event_tasks.pop(task, None)
-            stream = source_events if side == "source" else wallbox_events
-            event_tasks[asyncio.create_task(_next_bridge_event(side, stream))] = side
-            prefix = "SOURCE" if side == "source" else "WALLBOX"
+            stream = source_events if side in {"source", "source-client"} else wallbox_events
+            if stream is not None:
+                event_tasks[asyncio.create_task(_next_bridge_event(side, stream))] = side
+            prefix = "SOURCE" if side in {"source", "source-client"} else "WALLBOX"
+            if side == "source-client":
+                if isinstance(event, ShipEvent) and event.kind == "datagram":
+                    datagram = event.payload
+                    names = _command_names(datagram)
+                    if _matches_load_control(names):
+                        print(f"SOURCE LOADCONTROL commands={','.join(names) if names else '-'}", flush=True)
+                    request = _load_power_forward_request_from_datagram(
+                        datagram,
+                        peer_ski=normalize_ski(source_client.session.remote_server_ski if source_client else None)
+                        or source_peer_ski,
+                    )
+                    if source_client is not None:
+                        await source_client.handle_incoming_datagram(datagram)
+                    if request is not None:
+                        pending_lp_forward = request
+                        if await _forward_to_wallbox(request):
+                            pending_lp_forward = None
+                    continue
+                if isinstance(event, ShipEvent) and event.kind == "end":
+                    raise EebusError(f"source peer closed the SHIP session: {event.payload}")
+                continue
             if event.kind == "connected":
                 print(f"{prefix} connected peer_ski={event.payload.get('peer_ski') or '-'}", flush=True)
                 continue
@@ -799,8 +966,12 @@ async def _run_lp_bridge(args: argparse.Namespace) -> int:
     finally:
         for task in event_tasks:
             task.cancel()
-        await announcer.stop()
-        await listener.stop()
+        if source_client is not None:
+            await source_client.close()
+        if announcer is not None:
+            await announcer.stop()
+        if listener is not None:
+            await listener.stop()
         if wallbox_announcer is not None:
             await wallbox_announcer.stop()
             await wallbox_listener.stop()

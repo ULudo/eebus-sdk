@@ -5,8 +5,10 @@ from types import SimpleNamespace
 
 from eebus_sdk.cli import (
     _build_connection_config,
+    _build_source_connection_config,
     _command_names,
     _format_datagram_summary,
+    _load_power_forward_request_from_datagram,
     _matches_load_control,
     _should_request_remote_detailed_discovery,
     build_parser,
@@ -46,6 +48,93 @@ class CliHelpersTests(unittest.TestCase):
 
         self.assertEqual(names, ["nodeManagementDetailedDiscoveryData"])
         self.assertFalse(_matches_load_control(names))
+
+    def test_outbound_source_write_datagram_builds_forward_request(self) -> None:
+        datagram = build_datagram(
+            source={"device": "d:_i:PPC", "entity": [4], "feature": 1},
+            destination={"device": "d:_n:HEMS", "entity": [1], "feature": 2},
+            cmd_classifier="write",
+            msg_counter=163155,
+            commands=[
+                {
+                    "function": "loadControlLimitListData",
+                    "filter": [
+                        {
+                            "cmdControl": {"delete": []},
+                            "loadControlLimitListDataSelectors": {"limitId": 0},
+                            "loadControlLimitDataElements": {"timePeriod": []},
+                        },
+                        {"cmdControl": {"partial": []}},
+                    ],
+                    "loadControlLimitListData": {
+                        "loadControlLimitData": [
+                            {
+                                "limitId": 0,
+                                "isLimitActive": True,
+                                "timePeriod": {"endTime": "PT10M"},
+                                "value": {"number": 6000, "scale": 0},
+                            }
+                        ]
+                    },
+                }
+            ],
+        )
+
+        request = _load_power_forward_request_from_datagram(datagram, peer_ski="source-ski")
+
+        self.assertEqual(
+            request,
+            {
+                "peer_ski": "source-ski",
+                "watts": 6000,
+                "limit_id": 0,
+                "is_active": True,
+                "duration": "PT10M",
+                "duration_seconds": 600,
+            },
+        )
+
+    def test_outbound_source_scaled_lpp_write_datagram_builds_forward_request(self) -> None:
+        datagram = build_datagram(
+            source={"device": "d:_i:PPC", "entity": [4], "feature": 1},
+            destination={"device": "d:_n:HEMS", "entity": [1], "feature": 2},
+            cmd_classifier="write",
+            msg_counter=163130,
+            commands=[
+                {
+                    "function": "loadControlLimitListData",
+                    "loadControlLimitListData": {
+                        "loadControlLimitData": [
+                            {
+                                "limitId": 1,
+                                "isLimitActive": False,
+                                "timePeriod": {"endTime": "PT30S"},
+                                "value": {"number": -50, "scale": 3},
+                            }
+                        ]
+                    },
+                }
+            ],
+        )
+
+        request = _load_power_forward_request_from_datagram(datagram, peer_ski="source-ski")
+
+        self.assertIsNotNone(request)
+        self.assertEqual(request["limit_id"], 1)
+        self.assertEqual(request["watts"], 50000)
+        self.assertFalse(request["is_active"])
+        self.assertEqual(request["duration_seconds"], 30)
+
+    def test_outbound_source_read_datagram_is_not_forwarded(self) -> None:
+        datagram = build_datagram(
+            source={"device": "d:_i:PPC", "entity": [1], "feature": 2},
+            destination={"device": "d:_n:HEMS", "entity": [1], "feature": 2},
+            cmd_classifier="read",
+            msg_counter=163128,
+            commands=[{"loadControlLimitListData": []}],
+        )
+
+        self.assertIsNone(_load_power_forward_request_from_datagram(datagram, peer_ski="source-ski"))
 
     def test_connect_parser_accepts_profile_option(self) -> None:
         parser = build_parser()
@@ -300,6 +389,68 @@ class CliHelpersTests(unittest.TestCase):
         self.assertEqual(args.wallbox_peer_trust_anchor, ["wallbox-peer.pem"])
         self.assertEqual(args.wallbox_trusted_client_ski, ["wallbox-ski"])
         self.assertEqual(args.wallbox_ship_id, "i:local_u:wallbox-facing_r:HEMS")
+
+    def test_lp_bridge_parser_accepts_outbound_source_flags(self) -> None:
+        parser = build_parser()
+
+        args = parser.parse_args(
+            [
+                "lp",
+                "bridge",
+                "--identity",
+                "identity.json",
+                "--source-host",
+                "192.0.2.10",
+                "--source-port",
+                "23292",
+                "--source-server-name",
+                "source.local",
+                "--source-peer-ski",
+                "012345",
+                "--source-profile",
+                "cls-adapter",
+                "--source-timeout",
+                "7",
+                "--source-pairing-wait-seconds",
+                "30",
+                "--wallbox-ski",
+                "abcdef",
+                "--wallbox-identity",
+                "wallbox-identity.json",
+            ]
+        )
+
+        self.assertEqual(args.command, "lp")
+        self.assertEqual(args.lp_command, "bridge")
+        self.assertEqual(args.source_host, "192.0.2.10")
+        self.assertEqual(args.source_port, 23292)
+        self.assertEqual(args.source_server_name, "source.local")
+        self.assertEqual(args.source_peer_ski, "012345")
+        self.assertEqual(args.source_profile, "cls-adapter")
+        self.assertEqual(args.source_timeout, 7)
+        self.assertEqual(args.source_pairing_wait_seconds, 30)
+
+    def test_outbound_source_connection_uses_cls_adapter_access_mode(self) -> None:
+        args = SimpleNamespace(
+            source_host="192.0.2.10",
+            source_port=23292,
+            source_path="/ship/",
+            source_server_name="source.local",
+            source_timeout=7,
+            source_pairing_wait_seconds=30,
+            source_profile="cls-adapter",
+        )
+
+        config = _build_source_connection_config(args)
+
+        self.assertEqual(config.host, "192.0.2.10")
+        self.assertEqual(config.port, 23292)
+        self.assertEqual(config.server_name, "source.local")
+        self.assertEqual(config.timeout, 7)
+        self.assertEqual(config.pairing_wait_seconds, 30)
+        self.assertEqual(config.access_handshake_mode, "standard")
+        self.assertFalse(config.send_access_methods_response)
+        self.assertTrue(config.send_local_access_methods)
 
     def test_lpc_bridge_is_no_longer_a_command(self) -> None:
         parser = build_parser()

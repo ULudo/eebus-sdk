@@ -90,6 +90,17 @@ class InternalSpineHelperTests(unittest.TestCase):
         self.assertEqual(states[0]["watts"], 1000)
         self.assertEqual(extract_preferred_load_power_state(payload["loadControlLimitListData"])["limit_id"], 1)
 
+        scaled_states = extract_limit_states(
+            {
+                "loadControlLimitData": [
+                    {"limitId": 0, "value": {"number": 50, "scale": 3}},
+                    {"limitId": 1, "value": {"number": -6, "scale": 3}},
+                ]
+            }
+        )
+        self.assertEqual(scaled_states[0]["watts"], 50000)
+        self.assertEqual(scaled_states[1]["watts"], 6000)
+
 
 if __name__ == "__main__":
     unittest.main()
